@@ -1,0 +1,5 @@
+# Testing requirements for JLOH
+pytest>=6.0
+pytest-cov
+pytest-timeout
+pytest-xdist  # For parallel test execution
