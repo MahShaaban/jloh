@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+
+"""
+###
+JLOH - Inferring Loss of Heterozygosity Blocks from Short-read sequencing data
+
+Copyright (C) 2023 Matteo Schiavinato
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+###
+"""
+
+
+import os, random, sys
+from time import asctime as at
+from Bio import SeqIO, Seq
+import argparse as ap
+from operator import itemgetter
+import pandas as pd 
+import numpy as np
+from pybedtools import BedTool
+import pybedtools
+import multiprocessing as mp
+
+ss = sys.exit 
+
+
+# help section
+if len(sys.argv) == 1:
+    sys.argv.append("--help")
+
+if (sys.argv[1] in ["--help", "-h", "-help", "help", "getopt", "usage"]):
+    sys.stderr.write("""
+
+Simulate a divergent copy of a genome, introducing mutations and 
+loss-of-heterozygosity (LOH)
+
+Usage:
+jloh sim --fasta <FASTA> [options]
+
+[I/O/E]
+--fasta                 Input FASTA file to generate mutations on               [!]
+--out-fasta             Output FASTA filename                                   [mut.fa]
+--out-haplotypes        TSV file with generated haplotypes (div=0 is LOH)       [mut.haplotypes.tsv]
+--use-existing-hap      Do not generate new haplotypes, use these (TSV)         [off]
+
+[parameters]
+--threads               Number of parallel operations                           [4]
+--mean-haplotype-size   Generated haplotypes will have this average size        [25000]
+--min-haplotype-length  Minimum length of generated haplotypes                  [1000]
+--divergence            How much divergence in the mutated genome (0.0-1.0)     [0.01]
+--max-divergence        Max divergence value to allow in haplotypes             [0.2]
+--loh                   Apply this level of LOH (0.0-1.0)                       [0.0]
+--chrom-name-replace    Pattern and replacement for chrom names in mutated out  [off]
+                        (space separated, --chrom-name-replace <pat> <rep>)
+
+""")
+    sys.exit(0)
+
+
+p  = ap.ArgumentParser()
+p.add_argument("--threads", default=4, type=int)
+p.add_argument("--fasta")
+p.add_argument("--out-fasta", default="mut.fa")
+p.add_argument("--out-haplotypes", default="mut.haplotypes.tsv")
+p.add_argument("--use-existing-hap")
+p.add_argument("--hybrid", action="store_true")
+p.add_argument("--mean-haplotype-size", default=25000, type=int)
+p.add_argument("--min-haplotype-length", default=1000, type=int)
+p.add_argument("--divergence", default=0.01, type=float)
+p.add_argument("--max-divergence", default=0.2, type=float)
+p.add_argument("--loh", default=0.00, type=float)
+p.add_argument("--chrom-name-replace", nargs=2)
+args = p.parse_args()
+
+
+def mean(x):
+
+    """
+    08/02/2023
+    """
+
+    result = sum(x) / len(x)
+    return result 
+
+
+def dump_queue(queue):
+
+    """
+    08/02/2023
+    """
+
+    out = []
+    while not queue.empty():
+        x = queue.get()
+        out.append(x)
+
+    return out
+
+
+def get_chrom_sizes(fasta):
+
+    """
+    08/02/2023
+    """
+
+    Chrom_sizes = {}
+    for record in SeqIO.parse(fasta, "fasta"):
+        Chrom_sizes[str(record.id)] = int(len(record.seq))
+
+    return Chrom_sizes
+
+
+def get_chrom_sequences(fasta):
+
+    """
+    08/02/2023
+    """
+
+    Chroms = {}
+    for record in SeqIO.parse(fasta, "fasta"):
+        Chroms[str(record.id)] = str(record.seq)
+
+    return Chroms
+
+
+def get_chrom_random_intervals(mean_haplotype_size, min_haplotype_len, stdev_factor, chrom_len):
+
+    """
+    08/02/2023
+    """
+
+    # initialize variables and containers 
+    Intervals = []
+    start, end = 0, 0
+
+    # iterate over chrom length 
+    while (end < chrom_len):
+        start = int(end)
+        increment = np.random.normal( loc=float(mean_haplotype_size), 
+                                      scale=float(mean_haplotype_size)*stdev_factor)
+        
+        # if increment is smaller than min_haplotype_len, take min_haplotype_len
+        increment = max(min_haplotype_len, increment)
+
+        # if end is above chrom length, pick chrom length 
+        end = int(min(chrom_len, end+increment))
+
+        # if end is near chrom length, pick chrom length 
+        if (chrom_len - end < min_haplotype_len * 1.01):
+            end = chrom_len
+
+        # append interval 
+        Intervals.append((start, end))
+
+    return Intervals
+
+
+def get_chrom_interval_divergences(Chrom_intervals, divergence, max_divergence, stdev_factor):
+
+    """
+    18/10/2023
+    """
+
+    # beta distribution 
+    # https://numpy.org/doc/1.16/reference/generated/numpy.random.beta.html#numpy.random.beta
+    #
+    # must obtain alpha/beta parameters first, based on --divergence 
+    # mu = args.divergence
+    # stdev = 0.1
+    # var = stdev ** 2
+    # alpha = ((1-mu)/var - 1/mu) * mu ** 2
+    # beta = alpha * ((1 / mu) - 1)
+
+    # assign a divergence to each interval 
+    Chrom_intervals_w_div = []
+
+    if divergence > 0:
+
+        if divergence > max_divergence:
+            sys.stderr.write("--divergence cannot be higher than --max-divergence\n")
+            sys.exit()
+
+        # establish beta distribution parameters
+        mu = divergence 
+        maxdiv = max_divergence
+        stdev = mu * stdev_factor
+        var = stdev ** 2
+        alpha = ((1-mu)/var - 1/mu) * mu ** 2
+        beta = alpha * ((1 / mu) - 1)
+
+        for chrom in Chrom_intervals.keys():
+            num_intervals = len(Chrom_intervals[chrom])
+
+            # select only divergences within 0 and max-divergence 
+            Divs = list(np.random.beta(a=alpha, b=beta, size=num_intervals))
+            while (sum([div > max_divergence for div in Divs]) >= 0.5 * len(Divs)):
+                Divs = list(np.random.beta(a=alpha, b=beta, size=num_intervals))
+                sys.stderr.write(f"Redrafting divergences with div={mu} and maxdiv={maxdiv}...\n")
+
+            Divs = [i for i in Divs if i <= maxdiv]
+
+            for i in range(0,num_intervals):
+                Chrom_intervals_w_div.append(
+                    (
+                    chrom, 
+                    Chrom_intervals[chrom][i][0], 
+                    Chrom_intervals[chrom][i][1], 
+                    round(Divs[i], 3)
+                    )
+                    )
+    
+    else:
+        for chrom in Chrom_intervals.keys():
+            num_intervals = len(Chrom_intervals[chrom])
+            for i in range(0,num_intervals):
+                Chrom_intervals_w_div.append(
+                    (
+                    chrom, 
+                    Chrom_intervals[chrom][i][0], 
+                    Chrom_intervals[chrom][i][1], 
+                    0
+                    )
+                    )
+
+    return Chrom_intervals_w_div
+
+
+def nullify_fraction_of_intervals(Chrom_intervals_w_div, loh):
+
+    """
+    08/02/2023
+    """
+
+    # define indexes where to apply loh 
+    tot_items = len(Chrom_intervals_w_div)
+    loh_items = int(round(tot_items * loh, 0))
+    Loh_idxs = list(np.random.choice(tot_items, loh_items))
+    
+    # iterate over all items 
+    Intervals_w_loh = []
+    for idx in range(0, tot_items):
+        tup = Chrom_intervals_w_div[idx]
+        chrom, start, end, div = tup[0], tup[1], tup[2], tup[3]
+
+        # if index is in loh indexes turn divergence to 0 
+        if idx in Loh_idxs:
+            div = 0
+
+        Intervals_w_loh.append((chrom, start, end, div))
+
+    return Intervals_w_loh
+
+
+def correct_divergences_after_loh(Int_w_loh, divergence, max_divergence):
+
+    """
+    18/10/2023
+    """
+
+    if divergence > 0:
+
+        # convert to list to edit 
+        Int_w_loh_corr = [list(x) for x in Int_w_loh]
+
+        # calculate mean divergence 
+        mean_div = mean([x[3] for x in Int_w_loh_corr])
+
+        # while the new divergence with introduced LOH is not within 0.1% error from 
+        # the one that the user wants, adjust random intervals divergence by 5% increments
+        while ((mean_div < 0.999 * divergence) or (mean_div > 1.001 * divergence)):
+            
+            # pick random index 
+            idx = np.random.choice(len(Int_w_loh_corr))
+            
+            if (mean_div < 0.999 * divergence):
+                # increase divergence by 10% in that slot 
+                Int_w_loh_corr[idx][3] = round(min(max_divergence, Int_w_loh_corr[idx][3] + Int_w_loh_corr[idx][3] * 0.1), 3)
+
+            elif (mean_div > 1.001 * divergence):
+                # decrease divergence by 10% in that slot 
+                Int_w_loh_corr[idx][3] = round(max(0, Int_w_loh_corr[idx][3] - Int_w_loh_corr[idx][3] * 0.1), 3)
+
+            # re-calculate mean divergence 
+            mean_div = mean([x[3] for x in Int_w_loh_corr])
+
+        # re-convert to tuple 
+        Int_w_loh_corr = [tuple(x) for x in Int_w_loh_corr]
+
+        return Int_w_loh_corr
+
+    else:
+        return Int_w_loh 
+
+
+def get_chrom_subseqs(Int_w_loh_corr, Chrom_seqs):
+
+    """
+    08/02/2023
+    """
+
+    Int_w_loh_corr_seq = []
+
+    for x in Int_w_loh_corr:
+        chrom, start, end, div = x[0], x[1], x[2], x[3]
+        # extract subsequence 
+        subseq = Chrom_seqs[chrom][start:end]
+        Int_w_loh_corr_seq.append([chrom, start, end, div, subseq])
+
+    return Int_w_loh_corr_seq
+
+
+def mutate_sequence(chrom, start, end, div, seq, pid, queue):
+
+    """
+    08/02/2023
+    """
+
+    alphabet = set("ACTG")
+
+    # select <div> random indices from 0 to seq length 
+    num_mutations = int(round(len(seq) * div, 0))
+    Idxs = list(np.random.choice(len(seq), size=num_mutations))
+
+    # in each of these, change the nucleotide to any of the other 3 
+    mut_seq = list(seq)
+    for idx in Idxs:
+        original_nuc = seq[idx]
+        nuc_mut_choices = tuple(alphabet - set([original_nuc]))
+        mutated_nuc = nuc_mut_choices[np.random.choice(len(nuc_mut_choices))]
+        mut_seq[idx] = mutated_nuc
+
+    # return tuple with mutated seqs
+    mut_seq = "".join(mut_seq)
+    queue.put((chrom, start, end, div, mut_seq, pid))
+
+
+def get_mutate_sequence_pieces(Int_w_loh_corr_seqs, threads):
+
+    """
+    08/02/2023
+    """
+
+    pool = mp.Pool(args.threads)
+    queue = mp.Manager().Queue()
+
+    pid = 0
+    for x in Int_w_loh_corr_seqs:
+        chrom, start, end, div, seq = x
+        pid += 1
+        res = pool.apply_async(mutate_sequence, args=(chrom, start, end, div, seq, pid, queue))
+
+    pool.close()
+    pool.join()
+
+    Mut = dump_queue(queue)
+    Mut = sorted(Mut, key=itemgetter(5))
+
+    return Mut
+
+
+def join_chrom_subseqs(Int_w_loh_corr_seqs_mut):
+
+    """
+    08/02/2023 
+    """
+
+    Mut_chrom_seqs = {}
+
+    for x in Int_w_loh_corr_seqs_mut:
+        chrom, start, end, div, seq, pid = x 
+        try:
+            Mut_chrom_seqs[chrom] = Mut_chrom_seqs[chrom] + seq 
+        except KeyError:
+            Mut_chrom_seqs[chrom] = seq 
+
+    return Mut_chrom_seqs 
+
+
+def main(args):
+
+    """
+    19/10/2023
+    """
+
+    # script variables 
+    stdev_factor = 0.25
+
+    # get assembly chromosome lengths
+    sys.stderr.write(f"[{at()}] Getting chromosome sizes ... \r")
+    Chrom_sizes = get_chrom_sizes(args.fasta)
+    Chrom_intervals = { chrom : get_chrom_random_intervals(args.mean_haplotype_size, args.min_haplotype_length, stdev_factor, Chrom_sizes[chrom]) for chrom in Chrom_sizes.keys() }
+    sys.stderr.write(f"[{at()}] Getting chromosome sizes ... DONE \n")
+
+    sys.stderr.write(f"[{at()}] Reading their sequences ... \r")
+    Chrom_seqs = get_chrom_sequences(args.fasta)
+    INPUT = open(args.fasta, "r")
+    sys.stderr.write(f"[{at()}] Reading their sequences ... DONE \n")
+
+    sys.stderr.write(f"[{at()}] Storing their order in input file ... \r")
+    Chrom_order = [line.lstrip(">").rstrip("\b\r\n") for line in INPUT if line[0] == ">"]
+    INPUT.close()
+    sys.stderr.write(f"[{at()}] Storing their order in input file ... DONE \n")
+
+    # obtain list of intervals based on random lengths centered at 
+    # mean haplotype size (--mean-haplotype-size)
+    # use numpy's random normal distribution centered at mean haplo size 
+
+    if not args.use_existing_hap:
+
+        # obtain simulated distribution of haplotype divergence based on --divergence 
+        # for each haplotype
+        sys.stderr.write(f"[{at()}] Modelling internal divergences ... \r")
+        Chrom_intervals_w_div = get_chrom_interval_divergences(Chrom_intervals, 
+                                                            args.divergence, 
+                                                            args.max_divergence, 
+                                                            stdev_factor)
+        sys.stderr.write(f"[{at()}] Modelling internal divergences ... DONE \n")
+
+        # introduce loh based on the --loh argument
+        # turn to 0 the corresponding % of the sampled distribution
+        sys.stderr.write(f"[{at()}] Introducing required loh if specified ... \r")
+        Int_w_loh = nullify_fraction_of_intervals(Chrom_intervals_w_div, args.loh)
+        sys.stderr.write(f"[{at()}] Introducing required loh if specified ... DONE \n")
+        
+        # recalculate the distribution mean 
+        # randomly increase divergence in non-zero haplotypes to match --divergence 
+        if args.loh > 0:
+            sys.stderr.write(f"[{at()}] Recalculating divergence after loh ... \r")
+            Int_w_loh = correct_divergences_after_loh(Int_w_loh, args.divergence, args.max_divergence)
+            sys.stderr.write(f"[{at()}] Recalculating divergence after loh ... DONE \n")
+
+    else:
+        Int_w_loh = pd.read_csv(args.use_existing_hap, sep="\t")
+        Int_w_loh = Int_w_loh.loc[:,["Chrom", "Start", "End", "Divergence"]]
+        Int_w_loh = [tuple(tup[1:]) for tup in Int_w_loh.itertuples()]
+
+    # break down genome in chunks like the haplotypes 
+    sys.stderr.write(f"[{at()}] Extracting subsequences of chromosomes ... \r")
+    Int_w_loh_corr_seqs = get_chrom_subseqs(Int_w_loh, Chrom_seqs)
+    sys.stderr.write(f"[{at()}] Extracting subsequences of chromosomes ... DONE \n")
+
+    # introduce mutations according to simulated divergence rates 
+    sys.stderr.write(f"[{at()}] Extracting mutated sequence fragments ... \r")
+    Int_w_loh_corr_seqs_mut = get_mutate_sequence_pieces(Int_w_loh_corr_seqs, args.threads)
+    sys.stderr.write(f"[{at()}] Extracting mutated sequence fragments ... DONE \n")
+
+    # join sequences
+    sys.stderr.write(f"[{at()}] Joining chromosomal subsequences after mutation ... \r")
+    Mut_chrom_seqs = join_chrom_subseqs(Int_w_loh_corr_seqs_mut)
+    sys.stderr.write(f"[{at()}] Joining chromosomal subsequences after mutation ... DONE \n")
+
+    # write to output a tsv with introduced haplotypes and blocks 
+    sys.stderr.write(f"[{at()}] Writing to output ... \r")
+    OUTPUT = open(args.out_haplotypes, "w")
+    OUTPUT.write("\t".join(["Chrom", "Start", "End", "Length", "Divergence", "Haplotype"]) + "\n")
+    for x in Int_w_loh_corr_seqs_mut:
+        if x[3] == 0:
+            haplotype = "LOH"
+        else:
+            haplotype = "normal"
+        length = x[2] - x[1]
+        start = str(x[1] + 1)
+        end = str(x[2])
+        line = "\t".join([x[0], start, end, str(length), str(x[3]), haplotype]) + "\n"
+        OUTPUT.write(line)
+    OUTPUT.close()
+
+    # write to output the mutated fasta file 
+    OUTPUT = open(args.out_fasta, "w")
+    for chrom in Chrom_order:
+        mut_seq = Mut_chrom_seqs[chrom]
+        # alter chromosome names if required 
+        if args.chrom_name_replace:
+            chrom = chrom.replace(args.chrom_name_replace[0], args.chrom_name_replace[1])
+        # write sequence and name to output 
+        OUTPUT.write(f">{chrom}\n{mut_seq}\n")
+    OUTPUT.close()
+    sys.stderr.write(f"[{at()}] Writing to output ... DONE \n")
+
+
+if __name__=='__main__':
+    main(args)
