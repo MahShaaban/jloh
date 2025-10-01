@@ -818,7 +818,13 @@ def run_one_ref_script(loh_table, Names, args):
 
     # plot 
     sys.stderr.write(f"[{at()}] Plotting\n")
-    src_dir = "/".join(sys.argv[0].split("/")[0:-1]) + "/" + "scripts"
+    # Find the correct path to R scripts
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    src_dir = os.path.join(project_root, "src", "scripts")
+    if not os.path.exists(os.path.join(src_dir, "loh-bin-plots_one-ref.Rscript")):
+        # Fallback to old method if src/scripts doesn't exist
+        src_dir = "/".join(sys.argv[0].split("/")[0:-1]) + "/" + "scripts"
     cmd = " ".join([
         str(args.r_exec), 
         f"{src_dir}/loh-bin-plots_one-ref.Rscript", 
@@ -855,7 +861,13 @@ def run_two_ref_script(loh_table, Names, args):
 
     # plot 
     sys.stderr.write(f"[{at()}] Plotting\n") 
-    src_dir = "/".join(sys.argv[0].split("/")[0:-1]) + "/" + "scripts"
+    # Find the correct path to R scripts
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    src_dir = os.path.join(project_root, "src", "scripts")
+    if not os.path.exists(os.path.join(src_dir, "loh-bin-plots_two-ref.Rscript")):
+        # Fallback to old method if src/scripts doesn't exist
+        src_dir = "/".join(sys.argv[0].split("/")[0:-1]) + "/" + "scripts"
     cmd = " ".join([
         str(args.r_exec), f"{src_dir}/loh-bin-plots_two-ref.Rscript", 
         str(loh_table), 
