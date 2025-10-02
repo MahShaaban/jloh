@@ -145,7 +145,12 @@ def get_chrom_lengths_from_vcf(vcf):
     12/08/2022
     """
 
-    IN = open(args.vcf, "r")
+    # Handle both compressed and uncompressed VCF files
+    import gzip
+    if vcf.endswith('.gz'):
+        IN = gzip.open(args.vcf, "rt")
+    else:
+        IN = open(args.vcf, "r")
     Header = [line.rstrip("\r\b\n") for line in IN if line[0] == "#"]
     IN.close()
 
