@@ -374,12 +374,12 @@ def hetero_and_homo_snp_densities(ref,vcf, name):
 def divide_homo_vcf(homo_vcf,args, sample):
     vcf=vcfpy.Reader.from_path(homo_vcf, "r")
     homo_ALT_vcf_output = f"{args.output_dir}/homo_ALT{sample}.vcf"
-    homo_REF_vcf_output =  f"{args.output_dir}homo_REF{sample}.vcf"
+    homo_REF_vcf_output = f"{args.output_dir}/homo_REF{sample}.vcf"  # Added missing slash
     writer_ALT=vcfpy.Writer.from_path(homo_ALT_vcf_output, vcf.header)
     writer_REF=vcfpy.Writer.from_path(homo_REF_vcf_output, vcf.header)
 
     for record in vcf:
-        af_values = record.calls[0].data.get("AF", [])  # Get AF values, obtain an empty value if its not available (debugging)
+        af_values = record.calls[0].data.get("AF", [])
         # Fix: Handle both float and list cases
         if af_values:
             if isinstance(af_values, (int, float)):
@@ -1234,11 +1234,12 @@ def run_in_single_mode(args, tmp_bams, tmp_bams_control):
     sys.stderr.write(f"Done\n")
 
     # bed blocks
-    sys.stderr.write( f"[{at()}] Clustering heterozygous and homozygous SNPs into blocks...")
-    homo_vcf_ALT, homo_vcf_REF=divide_homo_vcf(homo_vcf, args, "_tumor")
-    Het_blocks, Homo_blocks_ALT, Homo_blocks_REF=snps_to_bed_blocks(args, hetero_vcf, homo_vcf_ALT,homo_vcf_REF, genome_file, "_tumor")
-    Het_blocks=filter_by_length(Het_blocks, args.min_length)
-    Het_blocks.saveas(f'{args.output_dir}/hetero_output_file.bed')  # Save the result to a file
+    sys.stderr.write(f"[{at()}] Clustering heterozygous and homozygous SNPs into blocks...")
+    homo_vcf_ALT, homo_vcf_REF = divide_homo_vcf(homo_vcf, args, "_tumor")
+    # FIXED: Removed extra "_tumor" parameter
+    Het_blocks, Homo_blocks_ALT, Homo_blocks_REF = snps_to_bed_blocks(args, hetero_vcf, homo_vcf_ALT, homo_vcf_REF, genome_file)
+    Het_blocks = filter_by_length(Het_blocks, args.min_length)
+    Het_blocks.saveas(f'{args.output_dir}/hetero_output_file.bed') # Save the result to a file
 
     sys.stderr.write(  "Done\n")
     sys.stderr.write(f"Found:\n -{len(Het_blocks)} het blocks\n -{len(Homo_blocks_ALT)} homo ALT blocks\n -{len(Homo_blocks_REF)} homo REF blocks\n")
