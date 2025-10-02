@@ -19,6 +19,25 @@ def read_requirements():
     except FileNotFoundError:
         return []
 
+# Find all packages under jloh directory
+def find_jloh_packages():
+    packages = []
+    if os.path.exists("jloh"):
+        packages.append("jloh")
+        # Check for subdirectories in jloh
+        for item in os.listdir("jloh"):
+            item_path = os.path.join("jloh", item)
+            if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "__init__.py")):
+                packages.append(f"jloh.{item}")
+    return packages
+
+# Check if cli.py exists
+def get_py_modules():
+    modules = []
+    if os.path.exists("cli.py"):
+        modules.append("cli")
+    return modules
+
 setup(
     name="jloh",
     version="1.0.3",
@@ -28,8 +47,8 @@ setup(
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/MahShaaban/jloh",
-    packages=["jloh", "jloh.functions"],  # Explicitly specify packages
-    py_modules=["cli"],  # Include the root cli.py module
+    packages=find_jloh_packages(),  # Dynamically find packages
+    py_modules=get_py_modules(),  # Include cli.py if it exists
     package_dir={"": "."},  # Packages are in the root directory
     include_package_data=True,
     install_requires=[
@@ -50,13 +69,12 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "jloh=cli:main",
+            "jloh=cli:main" if os.path.exists("cli.py") else "jloh=jloh.cli:main",
         ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
-        "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.9",
