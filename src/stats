@@ -75,8 +75,12 @@ def hetero_and_homo_snps(vcf):
     Last update: 03/03/2022
     """
 
-    # read SNPs
-    INPUT = open(vcf, "r")
+    # read SNPs - handle both compressed and uncompressed VCF files
+    import gzip
+    if vcf.endswith('.gz'):
+        INPUT = gzip.open(vcf, "rt")
+    else:
+        INPUT = open(vcf, "r")
     Vcf_lines = [ line for line in INPUT if line[0] != "#" ]
     INPUT.close()
 

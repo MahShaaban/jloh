@@ -162,13 +162,11 @@ def extract_variants(vcf_input, vcf_output, min_af, max_af, dir, name):
     2. If asked, select those that have pass the filtering
     3. Divide by homo and heterozygous
     '''
-    #check vcf file extension. Only uncompressed ones are allowed at this version.
-    if vcf_input.endswith(".vcf.gz"):
-        raise ValueError("ERROR. Please unzip your VCF file to continue")
-    elif vcf_input.endswith(".vcf"):
+    #check vcf file extension. Both compressed and uncompressed VCF files are supported.
+    if vcf_input.endswith(".vcf.gz") or vcf_input.endswith(".vcf"):
         vcf=vcfpy.Reader.from_path(vcf_input, "r")
     else:
-        raise ValueError("ERROR. Please provide a valid VCF file as input")
+        raise ValueError("ERROR. Please provide a valid VCF file as input (.vcf or .vcf.gz)")
 
     #store the paths of the file that are going to be created to use them afterwards
     hetero_vcf_output = f"{dir}/hetero_{vcf_output}{name}.vcf"
