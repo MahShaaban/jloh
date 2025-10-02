@@ -40,6 +40,27 @@ def run_integration_tests():
     return result == 0
 
 
+def run_case_study_tests():
+    """Run comprehensive case study tests."""
+    print("📋 Running case study tests (comprehensive pipeline)...")
+    
+    # Add the src directory to Python path
+    src_dir = os.path.join(os.path.dirname(__file__), 'src')
+    sys.path.insert(0, src_dir)
+    
+    # Import the test module
+    import unittest
+    from tests import test_case_study_unittest
+    
+    # Create test suite
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromModule(test_case_study_unittest)
+    
+    # Run tests
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    return result.wasSuccessful()
 def run_all_tests():
     """Run all available tests."""
     print("🚀 Running all tests...")
@@ -67,6 +88,13 @@ def run_all_tests():
         print("❌ Integration tests failed!")
     else:
         print("✅ Integration tests passed!")
+    
+    print("\n" + "="*60)
+    if not run_case_study_tests():
+        all_passed = False
+        print("❌ Case study tests failed!")
+    else:
+        print("✅ Case study tests passed!")
     
     print("\n" + "="*60)
     if all_passed:
@@ -100,7 +128,7 @@ def main():
         'test_type', 
         nargs='?', 
         default='quick',
-        choices=['basic', 'smoke', 'integration', 'all', 'quick'],
+        choices=['basic', 'smoke', 'integration', 'case-study', 'all', 'quick'],
         help='Type of tests to run (default: quick)'
     )
     parser.add_argument(
@@ -123,6 +151,8 @@ def main():
         success = run_smoke_tests()
     elif args.test_type == 'integration':
         success = run_integration_tests()
+    elif args.test_type == 'case-study':
+        success = run_case_study_tests()
     elif args.test_type == 'all':
         success = run_all_tests()
     elif args.test_type == 'quick':
